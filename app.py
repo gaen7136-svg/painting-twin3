@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 from scipy.optimize import linear_sum_assignment
 import time
 
-st.set_page_config(page_title="YULfactory: 통합 보건 관제", layout="wide")
+st.set_page_config(page_title="YULfactory: 보건 안전 통합 관제", layout="wide")
 
 # --- [1. 데이터 초기화] ---
 if 'workers' not in st.session_state:
@@ -19,7 +19,7 @@ if 'workers' not in st.session_state:
         'is_present': True, 'Status': '대기'
     })
     st.session_state.colors = {f'W_{i+1:02d}': f'hsl({i*12}, 70%, 50%)' for i in range(30)}
-    st.session_state.log = ["🚀 관제 시스템 가동"]
+    st.session_state.log = ["🚀 안전 관제 시스템 가동"]
 
 # --- [2. 사이드바: 실시간 제어] ---
 with st.sidebar:
@@ -46,23 +46,41 @@ with st.sidebar:
 def update_dashboard():
     workers = st.session_state.workers
     
-    # A. 인력 교체 로직
-    # 퇴출: 시간종료(8s), 컨디션난조(<0.4), 미출근
+    # A. 인력 교체 로직 (핵심 수정 부분)
+    # 퇴출 조건: 1. 시간 종료(8s) / 2. 컨디션 난조(<0.4) / 3. 누적 노출량 초과(>=100) / 4. 미출근
+    # 산업안전보건법 기준을 모사한 임계치(Threshold) 설정
+    LIMIT_EXPOSURE = 70.0 
+    
     to_exit = workers[(workers['Status'] == '근무') & 
-                      ((workers['Work_Time'] >= 8.0) | (workers['Condition'] < 0.4) | (~workers['is_present']))]
+                      ((workers['Work_Time'] >= 8.0) | 
+                       (workers['Condition'] < 0.4) | 
+                       (workers['Cum_Exp'] >= LIMIT_EXPOSURE) |
+                       (~workers['is_present']))]
+    
     for idx in to_exit.index:
+        w = workers.loc[idx]
         st.session_state.workers.at[idx, 'Status'] = '퇴근'
-        st.session_state.log.append(f"🚨 {workers.at[idx, 'ID']} 교체 완료")
+        
+        # 사유 판별 로그
+        if w['Cum_Exp'] >= LIMIT_EXPOSURE:
+            reason = "노출량 초과"
+        elif w['Condition'] < 0.4:
+            reason = "긴급보건"
+        else:
+            reason = "교대시간"
+        st.session_state.log.append(f"🚨 {w['ID']} 교체 ({reason})")
 
     # 무한 루프 리셋 (대기자 부족 시)
     if len(workers[(workers['Status'] == '대기') & (workers['is_present'])]) < 5:
-        st.session_state.workers.loc[(workers['Status'] == '퇴근') & (workers['is_present']), ['Work_Time', 'Status', 'Condition']] = [0.0, '대기', 1.0]
-        st.session_state.log.append("♻️ 사이클 리셋 및 컨디션 회복")
+        # 리셋 시 노출량도 초기화하여 선순환 구조 형성
+        st.session_state.workers.loc[(st.session_state.workers['Status'] == '퇴근') & (workers['is_present']), ['Work_Time', 'Status', 'Condition', 'Cum_Exp']] = [0.0, '대기', 1.0, 0.0]
+        st.session_state.log.append("♻️ 전원 휴식 및 데이터 리셋")
 
     # 투입 (10명 유지)
     current_duty = st.session_state.workers[st.session_state.workers['Status'] == '근무']
     if len(current_duty) < 10:
         needed = 10 - len(current_duty)
+        # 노출량이 가장 적었던 사람부터 우선 순위 배정 (보건 안전 최적화)
         available = st.session_state.workers[(st.session_state.workers['Status'] == '대기') & (workers['is_present'])].sort_values('Cum_Exp')
         for idx in available.iloc[:needed].index:
             st.session_state.workers.at[idx, 'Status'] = '근무'
@@ -93,11 +111,12 @@ def update_dashboard():
             for i in range(len(row_ind)):
                 w = on_duty.iloc[row_ind[i]]
                 b = booths[col_ind[i]]
-                # 데이터 업데이트 (0.5초치 가중치)
+                # 0.5초당 노출량 업데이트 (농도에 비례)
                 st.session_state.workers.loc[st.session_state.workers['ID'] == w['ID'], 'Work_Time'] += 0.5
-                st.session_state.workers.loc[st.session_state.workers['ID'] == w['ID'], 'Cum_Exp'] += b['VOC'] * 0.05 
+                st.session_state.workers.loc[st.session_state.workers['ID'] == w['ID'], 'Cum_Exp'] += b['VOC'] * 0.1 # 가중치 증가
                 
-                border = 'red' if w['Condition'] < 0.5 else 'white'
+                # 시각적 알림 (노출량 80 이상이면 주황 테두리, 컨디션 불량이면 빨강)
+                border = 'red' if w['Condition'] < 0.5 else ('orange' if w['Cum_Exp'] > 80 else 'white')
                 fig.add_trace(go.Scatter(x=[b['X']], y=[b['Y']], mode="markers+text",
                     marker=dict(size=45, color=st.session_state.colors[w['ID']], line=dict(width=4, color=border)),
                     text=[f"<b>{w['ID']}</b>"], textposition="middle center", showlegend=False))
@@ -105,24 +124,24 @@ def update_dashboard():
             st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
         with col_right:
-            st.subheader("📊 근무자 실시간 상태")
+            st.subheader("📊 안전 데이터 보드")
+            # 노출량 임계치 시각화 포함
+            st.progress(min(on_duty['Cum_Exp'].max() / 100, 1.0), text=f"현장 최대 노출 농도 ({round(on_duty['Cum_Exp'].max(),1)}/100)")
+            
             status_df = on_duty[['ID', 'Level', 'Condition', 'Work_Time', 'Cum_Exp']].copy()
             status_df.columns = ['ID', '숙련도', '컨디션', '시간(s)', '누적 노출량']
             
-            # 소수점 포맷팅 및 하이라이트
             st.dataframe(
                 status_df.sort_values('누적 노출량', ascending=False).style.format({
-                    '컨디션': '{:.2f}',
-                    '시간(s)': '{:.1f}',
-                    '누적 노출량': '{:.1f}'
-                }).background_gradient(subset=['누적 노출량'], cmap='OrRd'),
+                    '컨디션': '{:.2f}', '시간(s)': '{:.1f}', '누적 노출량': '{:.1f}'
+                }).background_gradient(subset=['누적 노출량'], cmap='YlOrRd'),
                 hide_index=True, use_container_width=True
             )
             st.divider()
-            st.caption("최근 시스템 로그")
+            st.caption("최근 안전 로그")
             for l in st.session_state.log[-4:]: st.write(f"· {l}")
     else:
-        st.error("🚨 인력 부족! 사이드바에서 출근 상태를 확인하십시오.")
+        st.error("🚨 인력 부족! 공정 가동이 일시 중단되었습니다.")
 
-st.title("🛡️ YULfactory: 지능형 공정 보건 관제 시스템")
+st.title("🛡️ YULfactory: 보건 안전 지능형 관제 시스템")
 update_dashboard()
