@@ -50,7 +50,19 @@ with st.sidebar:
 @st.fragment(run_every=1.5)
 def update_dashboard():
     workers = st.session_state.workers
-    
+
+    # 실시간 TWA 값 변화 모사
+    twa_ranges = {
+        'TWA_toluene': (0.0, 120.0),
+        'TWA_Xylene': (0.0, 220.0),
+        'TWA_Ketone': (0.0, 300.0)
+    }
+    for col, (low, high) in twa_ranges.items():
+        current = float(workers[col].iloc[0])
+        delta = np.random.uniform(-3.0, 3.0)
+        new_value = np.clip(current + delta, low, high)
+        st.session_state.workers.loc[:, col] = round(new_value, 1)
+
     # A. 인력 교체 로직 (핵심 수정 부분)
     # 퇴출 조건: 1. 시간 종료(8s) / 2. 컨디션 난조(<0.4) / 3. 누적 노출량 초과(>=100) / 4. 미출근
     # 산업안전보건법 기준을 모사한 임계치(Threshold) 설정
