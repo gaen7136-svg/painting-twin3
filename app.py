@@ -4,6 +4,7 @@ import numpy as np
 import plotly.graph_objects as go
 from scipy.optimize import linear_sum_assignment
 import time
+import random
 
 st.set_page_config(page_title="YULfactory: 보건 안전 통합 관제", layout="wide")
 
@@ -11,12 +12,16 @@ st.set_page_config(page_title="YULfactory: 보건 안전 통합 관제", layout=
 if 'workers' not in st.session_state:
     ids = [f'W_{i+1:02d}' for i in range(30)]
     levels = ['전문가']*5 + ['숙련공']*15 + ['신입']*10
+    TWA_toluene = random.randint(0, 200)
+    TWA_Xylene = random.randint(0,400)
+    TWA_Ketone = random.randint(0,800)
     np.random.shuffle(levels)
     st.session_state.workers = pd.DataFrame({
         'ID': ids, 'Level': levels,
         'Skill_Weight': [1.2 if l == '전문가' else 1.0 if l == '숙련공' else 0.7 for l in levels],
         'Condition': 1.0, 'Cum_Exp': 0.0, 'Work_Time': 0.0,
-        'is_present': True, 'Status': '대기'
+        'is_present': True, 'Status': '대기',
+        'TWA_toluene': TWA_toluene, 'TWA_Xylene': TWA_Xylene, 'TWA_Ketone': TWA_Ketone
     })
     st.session_state.colors = {f'W_{i+1:02d}': f'hsl({i*12}, 70%, 50%)' for i in range(30)}
     st.session_state.log = ["🚀 안전 관제 시스템 가동"]
@@ -127,6 +132,31 @@ def update_dashboard():
             st.subheader("📊 안전 데이터 보드")
             # 노출량 임계치 시각화 포함
             st.progress(min(on_duty['Cum_Exp'].max() / 100, 1.0), text=f"현장 최대 노출 농도 ({round(on_duty['Cum_Exp'].max(),1)}/100)")
+
+            # TWA 화학물질 임계치 감시
+            TWA_THRESHOLDS = {
+                'Toluene': 50,
+                'Xylene': 100,
+                'Ketone': 200
+            }
+            twa_toluene = workers['TWA_toluene'].iloc[0]
+            twa_xylene = workers['TWA_Xylene'].iloc[0]
+            twa_ketone = workers['TWA_Ketone'].iloc[0]
+            twa_exceeded = (
+                twa_toluene > TWA_THRESHOLDS['Toluene'] or
+                twa_xylene > TWA_THRESHOLDS['Xylene'] or
+                twa_ketone > TWA_THRESHOLDS['Ketone']
+            )
+
+            st.markdown("### 🧪 TWA 노출 현황")
+            twa_cols = st.columns(3)
+            twa_cols[0].metric("Toluene", f"{twa_toluene} ppm", f"기준 {TWA_THRESHOLDS['Toluene']} ppm")
+            twa_cols[1].metric("Xylene", f"{twa_xylene} ppm", f"기준 {TWA_THRESHOLDS['Xylene']} ppm")
+            twa_cols[2].metric("Ketone", f"{twa_ketone} ppm", f"기준 {TWA_THRESHOLDS['Ketone']} ppm")
+            if twa_exceeded:
+                st.error("🚨 TWA 임계치 초과: 한 개 이상의 화학물질이 기준치를 넘었습니다.")
+            else:
+                st.success("✅ 모든 TWA 수치가 기준치 이하입니다.")
             
             status_df = on_duty[['ID', 'Level', 'Condition', 'Work_Time', 'Cum_Exp']].copy()
             status_df.columns = ['ID', '숙련도', '컨디션', '시간(s)', '누적 노출량']
