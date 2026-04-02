@@ -166,7 +166,7 @@ def update_dashboard():
         col_left, col_right = st.columns([2.2, 1.2])
         
         with col_left:
-            st.subheader("🌐 실시간 공정 디지털 트윈 (도장 라인)")
+            st.subheader("🌐 실시간 공정 히트맵 (도장 라인)")
             fig = go.Figure(go.Heatmap(z=voc_matrix, x=[1,2,3,4,5,6], y=[1,2], colorscale='RdYlGn_r', zmin=0, zmax=100, opacity=0.4))
             
             fig.add_annotation(x=1.5, y=2.8, text="<b>Primer</b>", showarrow=False, font=dict(size=15, color="#555"))
@@ -250,5 +250,5 @@ def update_dashboard():
     else:
         st.error("🚨 인력 부족! 공정 가동이 일시 중단되었습니다. (최소 12명 필요)")
 
-st.title("🛡️ YULfactory: 보건 안전 지능형 관제 시스템")
+st.title("🛡️ YULfactory: 산업안전보건 지능형 관제 시스템")
 update_dashboard()
