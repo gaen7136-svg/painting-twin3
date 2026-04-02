@@ -60,7 +60,7 @@ if 'workers' not in st.session_state:
     st.session_state.log = ["🚀 안전 관제 시스템 가동"]
 
 # --- [2. 사이드바: 실시간 제어] ---
-with st.sidebar:    
+with st.sidebar:
     st.header("🕹️ 실시간 제어판")
     on_duty_ids = st.session_state.workers[st.session_state.workers['Status'] == '근무']['ID'].tolist()
     target = st.selectbox("컨디션 하락 타겟", on_duty_ids if on_duty_ids else ["없음"])
@@ -194,8 +194,6 @@ def update_dashboard():
                 margin=dict(l=10, r=10, t=10, b=10)
             )
             st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
-            
-            st.image("image.jpg", use_container_width=True)
 
         with col_right:
             st.subheader("📊 안전 데이터 보드")
