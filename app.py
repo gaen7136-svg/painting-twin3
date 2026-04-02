@@ -7,13 +7,39 @@ import random
 
 st.set_page_config(page_title="YULfactory: 보건 안전 통합 관제", layout="wide")
 
+# --- [커스텀 UI 헬퍼 함수] ---
+# 수치가 기준치를 넘으면 칸의 색상이 변하는 카드 UI
+def metric_card(title, value, threshold, unit="ppm", decimal=1):
+    exceeded = value > threshold
+    # 초과 시 붉은색 톤, 정상 시 녹색 톤
+    bg_color = "#fff0f0" if exceeded else "#f0fff0"
+    border_color = "#ff4d4d" if exceeded else "#4dff4d"
+    text_color = "#990000" if exceeded else "#006600"
+    icon = "🚨" if exceeded else "✅"
+    
+    html = f"""
+    <div style="background-color: {bg_color}; padding: 15px; border-radius: 8px; border-left: 6px solid {border_color}; margin-bottom: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
+        <div style="font-size: 0.9em; font-weight: bold; color: {text_color}; margin-bottom: 5px;">{title}</div>
+        <div style="font-size: 1.8em; font-weight: 900; color: {text_color};">{value:.{decimal}f} <span style="font-size: 0.45em; font-weight: normal;">{unit}</span></div>
+        <div style="font-size: 0.8em; color: {text_color}; margin-top: 5px;">{icon} 기준: {threshold} {unit} 이하</div>
+    </div>
+    """
+    return html
+
 # --- [1. 데이터 초기화] ---
 if 'workers' not in st.session_state:
     ids = [f'W_{i+1:02d}' for i in range(30)]
     levels = ['전문가']*5 + ['숙련공']*15 + ['신입']*10
-    TWA_toluene = random.randint(0, 200)
-    TWA_Xylene = random.randint(0, 400)
-    TWA_Ketone = random.randint(0, 800)
+    
+    # 일반 용제 초기화 (소수점 1자리)
+    TWA_toluene = round(random.uniform(0, 80.0), 1)
+    TWA_Xylene = round(random.uniform(0, 150.0), 1)
+    TWA_Ketone = round(random.uniform(0, 250.0), 1)
+    
+    # 💡 고위험 물질 Isocyanate 초기화 (기준치가 매우 낮으므로 소수점 3자리)
+    C_TDI = round(random.uniform(0.0, 0.03), 3) 
+    TWA_HDI = round(random.uniform(0.0, 0.01), 3)
+    
     np.random.shuffle(levels)
     
     df = pd.DataFrame({
@@ -23,13 +49,16 @@ if 'workers' not in st.session_state:
         'is_present': True, 'Status': '대기',
         'TWA_toluene': float(TWA_toluene),
         'TWA_Xylene': float(TWA_Xylene),
-        'TWA_Ketone': float(TWA_Ketone)
+        'TWA_Ketone': float(TWA_Ketone),
+        'C_TDI': float(C_TDI),
+        'TWA_HDI': float(TWA_HDI)
     })
     
-    # 💡 [핵심 수정 1] 엄격한 Pandas 환경을 위해 TWA 컬럼들을 명시적으로 실수(float) 처리
     df['TWA_toluene'] = df['TWA_toluene'].astype(float)
     df['TWA_Xylene'] = df['TWA_Xylene'].astype(float)
     df['TWA_Ketone'] = df['TWA_Ketone'].astype(float)
+    df['C_TDI'] = df['C_TDI'].astype(float)
+    df['TWA_HDI'] = df['TWA_HDI'].astype(float)
     
     st.session_state.workers = df
     st.session_state.colors = {f'W_{i+1:02d}': f'hsl({i*12}, 70%, 50%)' for i in range(30)}
@@ -66,15 +95,22 @@ def update_dashboard():
     twa_ranges = {
         'TWA_toluene': (0.0, 120.0),
         'TWA_Xylene': (0.0, 220.0),
-        'TWA_Ketone': (0.0, 300.0)
+        'TWA_Ketone': (0.0, 300.0),
+        'C_TDI': (0.0, 0.04),     # TDI 가동 범위
+        'TWA_HDI': (0.0, 0.015)   # HDI 가동 범위
     }
+    
     for col, (low, high) in twa_ranges.items():
-        # 💡 [핵심 수정 2] 값 계산 및 할당 시 자료형 충돌이 없도록 처리
         current = float(workers[col].iloc[0])
-        delta = np.random.uniform(-3.0, 3.0)
-        new_value = round(np.clip(current + delta, low, high), 1)
         
-        # .loc[:, col] 대신 컬럼 자체에 값을 할당하여 오류 방지
+        # 물질 특성에 맞춰 변동폭(delta)과 소수점 자리를 다르게 적용
+        if col in ['C_TDI', 'TWA_HDI']:
+            delta = np.random.uniform(-0.002, 0.002)
+            new_value = round(np.clip(current + delta, low, high), 3)
+        else:
+            delta = np.random.uniform(-3.0, 3.0)
+            new_value = round(np.clip(current + delta, low, high), 1)
+            
         st.session_state.workers[col] = float(new_value)
 
     # A. 인력 교체 로직
@@ -119,24 +155,31 @@ def update_dashboard():
     on_duty = st.session_state.workers[st.session_state.workers['Status'] == '근무'].head(10)
     
     if len(on_duty) == 10:
-        voc_matrix = np.random.randint(10, 100, (2, 5))
-        booths = [{'X': c+1, 'Y': r+1, 'VOC': voc_matrix[r, c]} for r in range(2) for c in range(5)]
+        voc_matrix = np.random.randint(10, 100, (2, 6))
+        booths = [{'X': c+1, 'Y': r+1, 'VOC': voc_matrix[r, c]} for r in range(2) for c in range(6)]
         
-        # 헝가리안 최적 배정
-        cost_matrix = np.zeros((10, 10))
+        cost_matrix = np.zeros((10, 12))
         for i in range(10):
             w = on_duty.iloc[i]
-            for j in range(10):
+            for j in range(12):
                 b = booths[j]
                 sens = 2.0 if w['Level'] == '신입' else 1.0
                 cost_matrix[i, j] = (sens * b['VOC'] + w['Cum_Exp']) / (w['Skill_Weight'] * w['Condition'])
         
         row_ind, col_ind = linear_sum_assignment(cost_matrix)
 
-        col_left, col_right = st.columns([2.5, 1])
+        col_left, col_right = st.columns([2.2, 1.2])
+        
         with col_left:
-            st.subheader("🌐 실시간 공정 디지털 트윈")
-            fig = go.Figure(go.Heatmap(z=voc_matrix, x=[1,2,3,4,5], y=[1,2], colorscale='RdYlGn_r', zmin=0, zmax=100, opacity=0.4))
+            st.subheader("🌐 실시간 공정 디지털 트윈 (도장 라인)")
+            fig = go.Figure(go.Heatmap(z=voc_matrix, x=[1,2,3,4,5,6], y=[1,2], colorscale='RdYlGn_r', zmin=0, zmax=100, opacity=0.4))
+            
+            fig.add_annotation(x=1.5, y=2.8, text="<b>Primer</b>", showarrow=False, font=dict(size=15, color="#555"))
+            fig.add_annotation(x=3.5, y=2.8, text="<b>Basecoat</b>", showarrow=False, font=dict(size=15, color="#555"))
+            fig.add_annotation(x=5.5, y=2.8, text="<b>Clearcoat</b>", showarrow=False, font=dict(size=15, color="#555"))
+            
+            fig.add_vline(x=2.5, line_dash="dash", line_color="rgba(100, 100, 100, 0.5)", line_width=2)
+            fig.add_vline(x=4.5, line_dash="dash", line_color="rgba(100, 100, 100, 0.5)", line_width=2)
             
             for i in range(len(row_ind)):
                 w = on_duty.iloc[row_ind[i]]
@@ -150,33 +193,58 @@ def update_dashboard():
                     marker=dict(size=45, color=st.session_state.colors[w['ID']], line=dict(width=4, color=border)),
                     text=[f"<b>{w['ID']}</b>"], textposition="middle center", showlegend=False))
                 
-            fig.update_layout(height=450, margin=dict(l=10, r=10, t=10, b=10))
+            fig.update_layout(
+                yaxis=dict(range=[0.5, 3.2]), 
+                height=450, 
+                margin=dict(l=10, r=10, t=10, b=10)
+            )
             st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
         with col_right:
             st.subheader("📊 안전 데이터 보드")
-            st.progress(min(on_duty['Cum_Exp'].max() / 100, 1.0), text=f"현장 최대 노출 농도 ({round(on_duty['Cum_Exp'].max(),1)}/100)")
-
-            TWA_THRESHOLDS = {'Toluene': 50, 'Xylene': 100, 'Ketone': 200}
-            twa_toluene = float(workers['TWA_toluene'].iloc[0])
-            twa_xylene = float(workers['TWA_Xylene'].iloc[0])
-            twa_ketone = float(workers['TWA_Ketone'].iloc[0])
             
-            twa_exceeded = (twa_toluene > TWA_THRESHOLDS['Toluene'] or
-                            twa_xylene > TWA_THRESHOLDS['Xylene'] or
-                            twa_ketone > TWA_THRESHOLDS['Ketone'])
+            # 임계치 및 현재 값 불러오기
+            THRESHOLDS = {'Toluene': 50, 'Xylene': 100, 'Ketone': 200, 'TDI': 0.02, 'HDI': 0.005}
+            t_tol = float(workers['TWA_toluene'].iloc[0])
+            t_xyl = float(workers['TWA_Xylene'].iloc[0])
+            t_ket = float(workers['TWA_Ketone'].iloc[0])
+            c_tdi = float(workers['C_TDI'].iloc[0])
+            t_hdi = float(workers['TWA_HDI'].iloc[0])
+            
+            # 하나라도 초과했는지 통합 검사
+            is_alert = any([
+                t_tol > THRESHOLDS['Toluene'], t_xyl > THRESHOLDS['Xylene'], 
+                t_ket > THRESHOLDS['Ketone'], c_tdi > THRESHOLDS['TDI'], t_hdi > THRESHOLDS['HDI']
+            ])
 
-            st.markdown("### 🧪 TWA 노출 현황")
+            # 💡 [신규 추가] Isocyanate 구역
+            st.markdown("### ☠️ 맹독성 경화제 (Clearcoat)")
+            st.caption("입자상+가스상 혼재로 감지가 어려우며 극미량으로도 치명적입니다.")
+            iso_cols = st.columns(2)
+            with iso_cols[0]:
+                st.markdown(metric_card("TDI 최고노출기준(C)", c_tdi, THRESHOLDS['TDI'], decimal=3), unsafe_allow_html=True)
+            with iso_cols[1]:
+                st.markdown(metric_card("HDI 시간가중평균(TWA)", t_hdi, THRESHOLDS['HDI'], decimal=3), unsafe_allow_html=True)
+
+            # 기존 용제 구역
+            st.markdown("### 🧪 일반 용제 TWA 현황")
             twa_cols = st.columns(3)
-            twa_cols[0].metric("Toluene", f"{twa_toluene} ppm", f"기준 {TWA_THRESHOLDS['Toluene']} ppm")
-            twa_cols[1].metric("Xylene", f"{twa_xylene} ppm", f"기준 {TWA_THRESHOLDS['Xylene']} ppm")
-            twa_cols[2].metric("Ketone", f"{twa_ketone} ppm", f"기준 {TWA_THRESHOLDS['Ketone']} ppm")
+            with twa_cols[0]:
+                st.markdown(metric_card("Toluene", t_tol, THRESHOLDS['Toluene']), unsafe_allow_html=True)
+            with twa_cols[1]:
+                st.markdown(metric_card("Xylene", t_xyl, THRESHOLDS['Xylene']), unsafe_allow_html=True)
+            with twa_cols[2]:
+                st.markdown(metric_card("Ketone", t_ket, THRESHOLDS['Ketone']), unsafe_allow_html=True)
             
-            if twa_exceeded:
-                st.error("🚨 TWA 임계치 초과: 기준치를 넘었습니다.")
+            # 전체 알림 메시지
+            if is_alert:
+                st.error("🚨 경고: 붉은색으로 표시된 유해물질이 노출 기준치를 초과했습니다! 즉각적인 환기 및 보호구 점검이 필요합니다.")
             else:
-                st.success("✅ 모든 TWA 수치가 정상입니다.")
+                st.success("✅ 모든 유해물질 수치가 안전 기준치 이내로 유지되고 있습니다.")
             
+            st.divider()
+            
+            # 상태 테이블
             status_df = on_duty[['ID', 'Level', 'Condition', 'Work_Time', 'Cum_Exp']].copy()
             status_df.columns = ['ID', '숙련도', '컨디션', '시간(s)', '누적 노출량']
             
@@ -186,9 +254,8 @@ def update_dashboard():
                 }).background_gradient(subset=['누적 노출량'], cmap='YlOrRd'),
                 hide_index=True, use_container_width=True
             )
-            st.divider()
             st.caption("최근 안전 로그")
-            for l in st.session_state.log[-4:]: 
+            for l in st.session_state.log[-3:]: 
                 st.write(f"· {l}")
     else:
         st.error("🚨 인력 부족! 공정 가동이 일시 중단되었습니다.")
